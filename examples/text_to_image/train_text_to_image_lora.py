@@ -43,13 +43,15 @@ from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 
 import diffusers
-from diffusers import AutoencoderKL, DDPMScheduler, DiffusionPipeline, StableDiffusionPipeline, UNet2DConditionModel
+from diffusers import AutoencoderKL, DDPMScheduler, DiffusionPipeline, StableDiffusionPipeline, UNet2DConditionModel, DDIMScheduler
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import cast_training_params, compute_snr
 from diffusers.utils import check_min_version, convert_state_dict_to_diffusers, is_wandb_available
 from diffusers.utils.hub_utils import load_or_create_model_card, populate_model_card
 from diffusers.utils.import_utils import is_xformers_available
 from diffusers.utils.torch_utils import is_compiled_module
+
+from ip_adapter import IPAdapterFull
 
 
 if is_wandb_available():
@@ -488,20 +490,37 @@ def main():
             repo_id = create_repo(
                 repo_id=args.hub_model_id or Path(args.output_dir).name, exist_ok=True, token=args.hub_token
             ).repo_id
+    
+    # Define model paths
+    base_model_path = "SG161222/Realistic_Vision_V4.0_noVAE"
+    vae_model_path = "stabilityai/sd-vae-ft-mse"
+    image_encoder_path = "models/image_encoder/"
+    ip_ckpt = "models/ip-adapter-full-face_sd15.bin"
     # Load scheduler, tokenizer and models.
-    noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
-    tokenizer = CLIPTokenizer.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="tokenizer", revision=args.revision
+    noise_scheduler = DDIMScheduler(
+        num_train_timesteps=1000,
+        beta_start=0.00085,
+        beta_end=0.012,
+        beta_schedule="scaled_linear",
+        clip_sample=False,
+        set_alpha_to_one=False,
+        steps_offset=1,
     )
-    text_encoder = CLIPTextModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
+    vae = AutoencoderKL.from_pretrained(vae_model_path).to(dtype=torch.float16)
+    # load SD pipeline
+    pipe = StableDiffusionPipeline.from_pretrained(
+        base_model_path,
+        torch_dtype=torch.float16,
+        scheduler=noise_scheduler,
+        vae=vae,
+        feature_extractor=None,
+        safety_checker=None
     )
-    vae = AutoencoderKL.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision, variant=args.variant
-    )
-    unet = UNet2DConditionModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, variant=args.variant
-    )
+    tokenizer = pipe.tokenizer
+    text_encoder = pipe.text_encoder
+    unet = pipe.unet
+    ip_model = IPAdapterFull(pipe, image_encoder_path, ip_ckpt, accelerator.device, num_tokens=257)
+
     # freeze parameters of models to save more memory
     unet.requires_grad_(False)
     vae.requires_grad_(False)
@@ -651,7 +670,7 @@ def main():
         inputs = tokenizer(
             captions, max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
         )
-        return inputs.input_ids
+        return inputs.input_ids, captions
 
     # Preprocessing the datasets.
     train_transforms = transforms.Compose(
@@ -672,7 +691,7 @@ def main():
     def preprocess_train(examples):
         images = [image.convert("RGB") for image in examples[image_column]]
         examples["pixel_values"] = [train_transforms(image) for image in images]
-        examples["input_ids"] = tokenize_captions(examples)
+        examples["input_ids"], examples["prompt"] = tokenize_captions(examples)
         return examples
 
     with accelerator.main_process_first():
@@ -685,8 +704,10 @@ def main():
         pixel_values = torch.stack([example["pixel_values"] for example in examples])
         pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
         input_ids = torch.stack([example["input_ids"] for example in examples])
-        return {"pixel_values": pixel_values, "input_ids": input_ids}
-
+        pil_image = [example["image"] for example in examples]
+        text_captions = [example["text"] for example in examples]
+        return {"pixel_values": pixel_values, "input_ids": input_ids, 'image': pil_image, 'text': text_captions}
+    
     # DataLoaders creation:
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
@@ -812,8 +833,37 @@ def main():
                 # (this is the forward diffusion process)
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
+                
+                ##### IP ADAPTER CODE #####
+                prompt = batch["text"]
+                pil_image = batch["image"][0]
+                negative_prompt = ["monochrome, lowres, bad anatomy, worst quality, low quality"]
+
+                image_prompt_embeds, uncond_image_prompt_embeds = ip_model.get_image_embeds(
+                    pil_image=pil_image, clip_image_embeds=None
+                )
+                num_samples = 1
+                bs_embed, seq_len, _ = image_prompt_embeds.shape
+                image_prompt_embeds = image_prompt_embeds.repeat(1, num_samples, 1)
+                image_prompt_embeds = image_prompt_embeds.view(bs_embed * num_samples, seq_len, -1)
+                uncond_image_prompt_embeds = uncond_image_prompt_embeds.repeat(1, num_samples, 1)
+                uncond_image_prompt_embeds = uncond_image_prompt_embeds.view(bs_embed * num_samples, seq_len, -1)
+
+                with torch.inference_mode():
+                    prompt_embeds_, negative_prompt_embeds_ = pipe.encode_prompt(
+                        prompt,
+                        device=accelerator.device,
+                        num_images_per_prompt=num_samples,
+                        do_classifier_free_guidance=True,
+                        negative_prompt=negative_prompt,
+                    )
+                    encoder_hidden_states = torch.cat([prompt_embeds_, image_prompt_embeds], dim=1)
+                    negative_prompt_embeds = torch.cat([negative_prompt_embeds_, uncond_image_prompt_embeds], dim=1)
+
+                ###########################
+
                 # Get the text embedding for conditioning
-                encoder_hidden_states = text_encoder(batch["input_ids"], return_dict=False)[0]
+                #encoder_hidden_states = text_encoder(batch["input_ids"], return_dict=False)[0]
 
                 # Get the target for loss depending on the prediction type
                 if args.prediction_type is not None:
