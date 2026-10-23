@@ -202,26 +202,33 @@ def log_validation(
         f" {args.validation_prompt}."
     )
     pipeline = pipeline.to(dtype=torch_dtype)
-    pipeline.enable_model_cpu_offload()
+    # move to the GPU instead of enable_model_cpu_offload(), which would leave the trained transformer on the CPU
+    pipeline.to(accelerator.device)
     pipeline.set_progress_bar_config(disable=True)
 
     # run inference
     generator = torch.Generator(device=accelerator.device).manual_seed(args.seed) if args.seed is not None else None
     autocast_ctx = torch.autocast(accelerator.device.type) if not is_final_validation else nullcontext()
 
+    cond_images = pipeline_args["image"]
+    if not isinstance(cond_images, list):
+        cond_images = [cond_images] * args.num_validation_images
     images = []
-    for _ in range(args.num_validation_images):
+    for cond_image in cond_images:
         with autocast_ctx:
             image = pipeline(
-                image=pipeline_args["image"],
+                image=cond_image,
                 prompt_embeds=pipeline_args["prompt_embeds"],
                 negative_prompt_embeds=pipeline_args["negative_prompt_embeds"],
                 generator=generator,
             ).images[0]
             images.append(image)
 
+    phase_name = "test" if is_final_validation else "validation"
+    if isinstance(pipeline_args["image"], list):
+        save_validation_grid(cond_images, images, os.path.join(args.output_dir, f"{phase_name}_step_{epoch}.png"))
+
     for tracker in accelerator.trackers:
-        phase_name = "test" if is_final_validation else "validation"
         if tracker.name == "tensorboard":
             np_images = np.stack([np.asarray(img) for img in images])
             tracker.writer.add_images(phase_name, np_images, epoch, dataformats="NHWC")
@@ -238,6 +245,25 @@ def log_validation(
     free_memory()
 
     return images
+
+
+def save_validation_grid(cond_images, images, path, cols=4):
+    """Save the condition images and their generations side by side, `cols` pairs per row."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    rows = math.ceil(len(images) / cols)
+    fig, axes = plt.subplots(rows, 2 * cols, figsize=(6 * cols, 3 * rows), squeeze=False)
+    for i, ax in enumerate(axes.flat):
+        ax.axis("off")
+        if i < 2 * len(images):
+            ax.imshow((cond_images if i % 2 == 0 else images)[i // 2])
+            ax.set_title("input" if i % 2 == 0 else "POV", fontsize=9)
+    plt.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
 
 
 def module_filter_fn(mod: torch.nn.Module, fqn: str):
@@ -367,7 +393,14 @@ def parse_args(input_args=None):
         "--validation_image",
         type=str,
         default=None,
-        help="path to an image that is used during validation as the condition image to verify that the model is learning.",
+        help="path to an image that is used during validation as the condition image to verify that the model is learning."
+        " Can also be a folder: every *_annotated.png in it is used, and an input/output grid is saved to output_dir.",
+    )
+    parser.add_argument(
+        "--validation_steps",
+        type=int,
+        default=None,
+        help="Run validation every X optimization steps instead of every `--validation_epochs` epochs.",
     )
     parser.add_argument(
         "--skip_final_inference",
@@ -1490,7 +1523,12 @@ def main(args):
             )
 
     if args.validation_prompt is not None:
-        validation_image = load_image(args.validation_image).convert("RGB")
+        if os.path.isdir(args.validation_image):
+            validation_image = [
+                load_image(str(p)).convert("RGB") for p in sorted(Path(args.validation_image).glob("*_annotated.png"))
+            ]
+        else:
+            validation_image = load_image(args.validation_image).convert("RGB")
         validation_kwargs = {"image": validation_image}
         with offload_models(text_encoding_pipeline, device=accelerator.device, offload=args.offload):
             validation_kwargs["prompt_embeds"], _text_ids = compute_text_embeddings(
@@ -1818,6 +1856,26 @@ def main(args):
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
 
+                if (
+                    accelerator.is_main_process
+                    and args.validation_prompt is not None
+                    and args.validation_steps
+                    and global_step % args.validation_steps == 0
+                ):
+                    pipeline = Flux2KleinPipeline.from_pretrained(
+                        args.pretrained_model_name_or_path,
+                        text_encoder=None,
+                        tokenizer=None,
+                        transformer=unwrap_model(transformer),
+                        revision=args.revision,
+                        variant=args.variant,
+                        torch_dtype=weight_dtype,
+                    )
+                    log_validation(pipeline, args, accelerator, validation_kwargs, global_step, weight_dtype)
+                    del pipeline
+                    free_memory()
+                    transformer.train()
+
             logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
             accelerator.log(logs, step=global_step)
@@ -1826,7 +1884,7 @@ def main(args):
                 break
 
         if accelerator.is_main_process:
-            if args.validation_prompt is not None and epoch % args.validation_epochs == 0:
+            if args.validation_prompt is not None and not args.validation_steps and epoch % args.validation_epochs == 0:
                 # create pipeline
                 pipeline = Flux2KleinPipeline.from_pretrained(
                     args.pretrained_model_name_or_path,
@@ -1915,7 +1973,7 @@ def main(args):
                     args=args,
                     accelerator=accelerator,
                     pipeline_args=validation_kwargs,
-                    epoch=epoch,
+                    epoch=global_step,
                     is_final_validation=True,
                     torch_dtype=weight_dtype,
                 )
