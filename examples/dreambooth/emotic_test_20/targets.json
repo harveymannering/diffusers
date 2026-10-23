@@ -1,0 +1,262 @@
+[
+ {
+  "file": "00_COCO_train2014_000000245075_person0",
+  "emotic_image": "emotic/emotic/mscoco/images/COCO_train2014_000000245075.jpg",
+  "person_idx": 0,
+  "people_in_image": 1,
+  "body_bbox": [
+   185.0,
+   160.0,
+   402.0,
+   446.0
+  ],
+  "iou": 0.932
+ },
+ {
+  "file": "01_COCO_train2014_000000189765_person0",
+  "emotic_image": "emotic/emotic/mscoco/images/COCO_train2014_000000189765.jpg",
+  "person_idx": 0,
+  "people_in_image": 1,
+  "body_bbox": [
+   130.0,
+   100.0,
+   239.0,
+   416.0
+  ],
+  "iou": 0.944
+ },
+ {
+  "file": "02_COCO_val2014_000000577712_person0",
+  "emotic_image": "emotic/emotic/mscoco/images/COCO_val2014_000000577712.jpg",
+  "person_idx": 0,
+  "people_in_image": 1,
+  "body_bbox": [
+   287.0,
+   246.0,
+   448.0,
+   423.0
+  ],
+  "iou": 0.925
+ },
+ {
+  "file": "03_COCO_val2014_000000566277_person0",
+  "emotic_image": "emotic/emotic/mscoco/images/COCO_val2014_000000566277.jpg",
+  "person_idx": 0,
+  "people_in_image": 2,
+  "body_bbox": [
+   190.0,
+   36.0,
+   320.0,
+   379.0
+  ],
+  "iou": 0.963
+ },
+ {
+  "file": "04_COCO_val2014_000000237428_person0",
+  "emotic_image": "emotic/emotic/mscoco/images/COCO_val2014_000000237428.jpg",
+  "person_idx": 0,
+  "people_in_image": 1,
+  "body_bbox": [
+   265.0,
+   114.0,
+   420.0,
+   345.0
+  ],
+  "iou": 0.909
+ },
+ {
+  "file": "05_COCO_train2014_000000013670_person1",
+  "emotic_image": "emotic/emotic/mscoco/images/COCO_train2014_000000013670.jpg",
+  "person_idx": 1,
+  "people_in_image": 2,
+  "body_bbox": [
+   290.0,
+   178.0,
+   442.0,
+   381.0
+  ],
+  "iou": 0.936
+ },
+ {
+  "file": "06_COCO_val2014_000000133244_person0",
+  "emotic_image": "emotic/emotic/mscoco/images/COCO_val2014_000000133244.jpg",
+  "person_idx": 0,
+  "people_in_image": 1,
+  "body_bbox": [
+   199.0,
+   107.0,
+   323.0,
+   311.0
+  ],
+  "iou": 0.935
+ },
+ {
+  "file": "07_frame_i8j89tzvnxrbnw3c_person1",
+  "emotic_image": "emotic/emotic/framesdb/images/frame_i8j89tzvnxrbnw3c.jpg",
+  "person_idx": 1,
+  "people_in_image": 2,
+  "body_bbox": [
+   499.0,
+   171.0,
+   575.0,
+   327.0
+  ],
+  "iou": 0.795
+ },
+ {
+  "file": "08_COCO_train2014_000000443564_person0",
+  "emotic_image": "emotic/emotic/mscoco/images/COCO_train2014_000000443564.jpg",
+  "person_idx": 0,
+  "people_in_image": 1,
+  "body_bbox": [
+   91.0,
+   38.0,
+   460.0,
+   318.0
+  ],
+  "iou": 0.83
+ },
+ {
+  "file": "09_sun_apemokseajiuenke_person1",
+  "emotic_image": "emotic/emotic/ade20k/images/sun_apemokseajiuenke.jpg",
+  "person_idx": 1,
+  "people_in_image": 2,
+  "body_bbox": [
+   83.0,
+   131.0,
+   186.0,
+   393.0
+  ],
+  "iou": 0.944
+ },
+ {
+  "file": "10_COCO_train2014_000000500359_person1",
+  "emotic_image": "emotic/emotic/mscoco/images/COCO_train2014_000000500359.jpg",
+  "person_idx": 1,
+  "people_in_image": 2,
+  "body_bbox": [
+   102.0,
+   67.0,
+   367.0,
+   425.0
+  ],
+  "iou": 0.94
+ },
+ {
+  "file": "11_COCO_val2014_000000215072_person1",
+  "emotic_image": "emotic/emotic/mscoco/images/COCO_val2014_000000215072.jpg",
+  "person_idx": 1,
+  "people_in_image": 2,
+  "body_bbox": [
+   115.0,
+   148.0,
+   244.0,
+   380.0
+  ],
+  "iou": 0.873
+ },
+ {
+  "file": "12_COCO_train2014_000000247660_person1",
+  "emotic_image": "emotic/emotic/mscoco/images/COCO_train2014_000000247660.jpg",
+  "person_idx": 1,
+  "people_in_image": 2,
+  "body_bbox": [
+   384.0,
+   167.0,
+   510.0,
+   460.0
+  ],
+  "iou": 0.85
+ },
+ {
+  "file": "13_COCO_train2014_000000501698_person0",
+  "emotic_image": "emotic/emotic/mscoco/images/COCO_train2014_000000501698.jpg",
+  "person_idx": 0,
+  "people_in_image": 2,
+  "body_bbox": [
+   18.0,
+   77.0,
+   117.0,
+   471.0
+  ],
+  "iou": 0.884
+ },
+ {
+  "file": "14_COCO_train2014_000000005933_person1",
+  "emotic_image": "emotic/emotic/mscoco/images/COCO_train2014_000000005933.jpg",
+  "person_idx": 1,
+  "people_in_image": 2,
+  "body_bbox": [
+   361.0,
+   44.0,
+   597.0,
+   425.0
+  ],
+  "iou": 0.947
+ },
+ {
+  "file": "15_frame_bmy4y5wm892yij79_person4",
+  "emotic_image": "emotic/emotic/framesdb/images/frame_bmy4y5wm892yij79.jpg",
+  "person_idx": 4,
+  "people_in_image": 5,
+  "body_bbox": [
+   271.0,
+   246.0,
+   382.0,
+   549.0
+  ],
+  "iou": 0.929
+ },
+ {
+  "file": "16_1b56wk6z7tispb2iyb_person1",
+  "emotic_image": "emotic/emotic/emodb_small/images/1b56wk6z7tispb2iyb.jpg",
+  "person_idx": 1,
+  "people_in_image": 3,
+  "body_bbox": [
+   57.0,
+   90.0,
+   172.0,
+   300.0
+  ],
+  "iou": 0.633
+ },
+ {
+  "file": "17_COCO_val2014_000000006471_person1",
+  "emotic_image": "emotic/emotic/mscoco/images/COCO_val2014_000000006471.jpg",
+  "person_idx": 1,
+  "people_in_image": 2,
+  "body_bbox": [
+   87.0,
+   184.0,
+   240.0,
+   324.0
+  ],
+  "iou": 0.943
+ },
+ {
+  "file": "18_COCO_train2014_000000067615_person0",
+  "emotic_image": "emotic/emotic/mscoco/images/COCO_train2014_000000067615.jpg",
+  "person_idx": 0,
+  "people_in_image": 2,
+  "body_bbox": [
+   42.0,
+   226.0,
+   216.0,
+   391.0
+  ],
+  "iou": 0.925
+ },
+ {
+  "file": "19_COCO_val2014_000000057703_person0",
+  "emotic_image": "emotic/emotic/mscoco/images/COCO_val2014_000000057703.jpg",
+  "person_idx": 0,
+  "people_in_image": 2,
+  "body_bbox": [
+   471.0,
+   46.0,
+   617.0,
+   374.0
+  ],
+  "iou": 0.875
+ }
+]
