@@ -30,13 +30,16 @@ conda activate gemma
 OUT=/scratch/hgm1g14/FluxLoRAOutputs/flux2-klein-pov  # LoRA, checkpoints and validation grids
 mkdir -p "$OUT"
 
+# load_dataset can't resolve a Hub name offline, so point it at the downloaded snapshot directly
+DATASET=$(ls -d "$HF_HOME"/hub/datasets--harveymannering--camera-control-pairs/snapshots/*/ | head -n 1)
+
 # Every 500 steps the 20 emotic_test_20/*_annotated.png images are run through the model and saved as
 # $OUT/validation_step_<step>.png (input | POV grid); the final LoRA's grid is $OUT/test_step_<step>.png.
 accelerate launch --num_processes=1 --num_machines=1 --mixed_precision=bf16 --dynamo_backend=no \
   train_dreambooth_lora_flux2_klein_img2img.py \
   --pretrained_model_name_or_path=/iridisfs/scratch/hgm1g14/cache_dir/hub/models--black-forest-labs--FLUX.2-klein-base-9B/snapshots/32773329fbe7e81a90ef971740e8ba4b0364ecf3 \
   --output_dir="$OUT" \
-  --dataset_name="harveymannering/camera-control-pairs" \
+  --dataset_name="$DATASET" \
   --image_column="image" --cond_image_column="cond_image" --caption_column="caption" \
   --mixed_precision="bf16" \
   --gradient_checkpointing \
