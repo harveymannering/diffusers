@@ -220,11 +220,12 @@ def log_validation(
     is_final_validation=False,
 ):
     args.num_validation_images = args.num_validation_images if args.num_validation_images else 1
+    # A single condition image is edited `num_validation_images` times; a folder of them is edited once each.
+    if len(pipeline_args) == 1:
+        pipeline_args = pipeline_args * args.num_validation_images
     # `--final_validation_prompt` stands in when only the final pass is asked for.
     validation_prompt = args.validation_prompt or args.final_validation_prompt
-    logger.info(
-        f"Running validation... \n Generating {args.num_validation_images} images with prompt: {validation_prompt}."
-    )
+    logger.info(f"Running validation... \n Generating {len(pipeline_args)} images with prompt: {validation_prompt}.")
     pipeline = pipeline.to(accelerator.device, dtype=torch_dtype)
     pipeline.set_progress_bar_config(disable=True)
 
@@ -233,10 +234,13 @@ def log_validation(
     autocast_ctx = torch.autocast(accelerator.device.type) if not is_final_validation else nullcontext()
 
     images = []
-    for _ in range(args.num_validation_images):
+    for sample_args in pipeline_args:
+        sample_args = dict(sample_args)
+        # Each condition image was encoded with the prompt, so each one brings its own image-pad mask.
+        pipeline.cached_image_pad_mask = sample_args.pop("image_pad_mask")
         with autocast_ctx:
             image = pipeline(
-                **pipeline_args,
+                **sample_args,
                 num_inference_steps=args.validation_num_inference_steps,
                 # Classifier-free guidance off, as in the model's own sample script: with `true_cfg_scale <= 1`
                 # a step is a single forward pass through the transformer.
@@ -246,8 +250,15 @@ def log_validation(
             ).images[0]
             images.append(image)
 
+    phase_name = "test" if is_final_validation else "validation"
+    if os.path.isdir(args.validation_image):
+        save_validation_grid(
+            [sample_args["image"] for sample_args in pipeline_args],
+            images,
+            os.path.join(args.output_dir, f"{phase_name}_step_{epoch}.png"),
+        )
+
     for tracker in accelerator.trackers:
-        phase_name = "test" if is_final_validation else "validation"
         if tracker.name == "tensorboard":
             # The pipeline returns RGBA, this VAE having four channels, and `add_images` asserts three.
             np_images = np.stack([np.asarray(img.convert("RGB")) for img in images])
@@ -265,6 +276,26 @@ def log_validation(
     free_memory()
 
     return images
+
+
+def save_validation_grid(cond_images, images, path, cols=4):
+    """Save the condition images and their generations side by side, `cols` pairs per row."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    rows = math.ceil(len(images) / cols)
+    fig, axes = plt.subplots(rows, 2 * cols, figsize=(6 * cols, 3 * rows), squeeze=False)
+    for i, ax in enumerate(axes.flat):
+        ax.axis("off")
+        if i < 2 * len(images):
+            # The pipeline returns RGBA, this VAE having four channels.
+            ax.imshow((cond_images if i % 2 == 0 else images)[i // 2].convert("RGB"))
+            ax.set_title("input" if i % 2 == 0 else "POV", fontsize=9)
+    plt.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
 
 
 def parse_args(input_args=None):
@@ -372,7 +403,15 @@ def parse_args(input_args=None):
         "--validation_image",
         type=str,
         default=None,
-        help="Path or URL of the condition image to edit during validation.",
+        help="Path or URL of the condition image to edit during validation. Can also be a folder: every"
+        " *_annotated.png in it is used, and an input/output grid is saved to output_dir.",
+    )
+    parser.add_argument(
+        "--validation_steps",
+        type=int,
+        default=None,
+        help="Run validation every X optimization steps, and once before training, instead of every"
+        " `--validation_epochs` epochs.",
     )
     parser.add_argument(
         "--validation_num_inference_steps",
@@ -1644,8 +1683,8 @@ def main(args):
         with offload_models(text_encoding_pipeline, device=accelerator.device, offload=args.offload):
             empty_prompt_embeds, empty_prompt_embeds_mask, _ = compute_text_embeddings("", text_encoding_pipeline)
 
-    validation_pipeline_args = {}
-    validation_image_pad_mask = None
+    # One entry per validation condition image, each with the embeddings encoded alongside it.
+    validation_pipeline_args = []
     # The final pass runs on `--final_validation_prompt` when `--validation_prompt` is absent, so the embeddings
     # have to be built for whichever one is set - the text encoder is freed before that pass reaches the pipeline.
     effective_validation_prompt = args.validation_prompt or args.final_validation_prompt
@@ -1655,22 +1694,32 @@ def main(args):
                 "A validation prompt needs `--validation_image`, the image the edit is applied to. Pass it "
                 "alongside `--validation_prompt` or `--final_validation_prompt`."
             )
-        validation_image = load_image(args.validation_image)
-        # Encoded at the size the pipeline will resize to, so vision tokens and latents line up.
-        width, height, _ = calculate_dimensions(
-            args.resolution * args.resolution, validation_image.size[0] / validation_image.size[1]
-        )
-        resized_validation_image = validation_image.resize((width, height))
+        if os.path.isdir(args.validation_image):
+            validation_images = [
+                load_image(str(p)) for p in sorted(Path(args.validation_image).glob("*_annotated.png"))
+            ]
+            if not validation_images:
+                raise ValueError(f"No *_annotated.png images found in `--validation_image` {args.validation_image}.")
+        else:
+            validation_images = [load_image(args.validation_image)]
         with offload_models(text_encoding_pipeline, device=accelerator.device, offload=args.offload):
-            embeds, embeds_mask, image_pad_mask = compute_text_embeddings(
-                effective_validation_prompt, text_encoding_pipeline, resized_validation_image
-            )
-        validation_pipeline_args = {
-            "prompt_embeds": embeds,
-            "prompt_embeds_mask": embeds_mask,
-            "image": validation_image,
-        }
-        validation_image_pad_mask = image_pad_mask
+            for validation_image in validation_images:
+                # Encoded at the size the pipeline will resize to, so vision tokens and latents line up.
+                width, height, _ = calculate_dimensions(
+                    args.resolution * args.resolution, validation_image.size[0] / validation_image.size[1]
+                )
+                resized_validation_image = validation_image.resize((width, height))
+                embeds, embeds_mask, image_pad_mask = compute_text_embeddings(
+                    effective_validation_prompt, text_encoding_pipeline, resized_validation_image
+                )
+                validation_pipeline_args.append(
+                    {
+                        "prompt_embeds": embeds,
+                        "prompt_embeds_mask": embeds_mask,
+                        "image": validation_image,
+                        "image_pad_mask": image_pad_mask,
+                    }
+                )
 
     # if cache_latents is set to True, we encode images to latents and store them.
     # Similar to pre-encoding in the case of a single instance prompt, if custom prompts are provided
@@ -1831,6 +1880,41 @@ def main(args):
         while len(sigma.shape) < n_dim:
             sigma = sigma.unsqueeze(-1)
         return sigma
+
+    def log_intermediate_validation(step):
+        # create pipeline. The prompt is supplied as embeddings, so no text encoder is loaded.
+        pipeline = QwenImage21ValidationPipeline.from_pretrained(
+            args.pretrained_model_name_or_path,
+            text_encoder=None,
+            processor=processor,
+            transformer=accelerator.unwrap_model(transformer),
+            revision=args.revision,
+            variant=args.variant,
+            torch_dtype=weight_dtype,
+        )
+        log_validation(
+            pipeline=pipeline,
+            args=args,
+            accelerator=accelerator,
+            pipeline_args=validation_pipeline_args,
+            torch_dtype=weight_dtype,
+            epoch=step,
+        )
+        del pipeline
+        free_memory()
+        # The pipeline cast the whole transformer to `weight_dtype`, LoRA included.
+        if args.mixed_precision == "fp16":
+            cast_training_params([transformer], dtype=torch.float32)
+        transformer.train()
+
+    # A baseline before any training, saved as validation_step_0.
+    if (
+        accelerator.is_main_process
+        and args.validation_prompt is not None
+        and args.validation_steps
+        and global_step == 0
+    ):
+        log_intermediate_validation(global_step)
 
     for epoch in range(first_epoch, args.num_train_epochs):
         transformer.train()
@@ -2018,7 +2102,15 @@ def main(args):
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
 
-            logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
+                if (
+                    accelerator.is_main_process
+                    and args.validation_prompt is not None
+                    and args.validation_steps
+                    and global_step % args.validation_steps == 0
+                ):
+                    log_intermediate_validation(global_step)
+
+            logs ={"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
             accelerator.log(logs, step=global_step)
 
@@ -2026,29 +2118,12 @@ def main(args):
                 break
 
         if accelerator.is_main_process:
-            if args.validation_prompt is not None and epoch % args.validation_epochs == 0:
-                # create pipeline. The prompt is supplied as embeddings, so no text encoder is loaded.
-                pipeline = QwenImage21ValidationPipeline.from_pretrained(
-                    args.pretrained_model_name_or_path,
-                    text_encoder=None,
-                    processor=processor,
-                    transformer=accelerator.unwrap_model(transformer),
-                    revision=args.revision,
-                    variant=args.variant,
-                    torch_dtype=weight_dtype,
-                )
-                pipeline.cached_image_pad_mask = validation_image_pad_mask
-                images = log_validation(
-                    pipeline=pipeline,
-                    args=args,
-                    accelerator=accelerator,
-                    pipeline_args=validation_pipeline_args,
-                    torch_dtype=weight_dtype,
-                    epoch=epoch,
-                )
-                del pipeline
-                images = None
-                free_memory()
+            if (
+                args.validation_prompt is not None
+                and not args.validation_steps
+                and epoch % args.validation_epochs == 0
+            ):
+                log_intermediate_validation(epoch)
 
     # Save the lora layers
     accelerator.wait_for_everyone()
@@ -2086,7 +2161,6 @@ def main(args):
             )
             # load attention processors
             pipeline.load_lora_weights(args.output_dir)
-            pipeline.cached_image_pad_mask = validation_image_pad_mask
 
             # run inference
             images = log_validation(
@@ -2094,7 +2168,7 @@ def main(args):
                 args=args,
                 accelerator=accelerator,
                 pipeline_args=validation_pipeline_args,
-                epoch=epoch,
+                epoch=global_step,
                 is_final_validation=True,
                 torch_dtype=weight_dtype,
             )
